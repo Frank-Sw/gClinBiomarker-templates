@@ -1,0 +1,233 @@
+---
+title: "Biomarker analysis report"
+author: ""
+date: '`r Sys.Date()`'
+output: 
+  pdf_document:
+    toc: true
+    toc_depth: 4
+    number_sections: true
+---
+
+
+```{r,warning=FALSE, message=FALSE, include=FALSE}
+library(gClinBiomarker)
+library(knitr)
+
+csv.name <- "/Users/lengn/Documents/Biomarker/Rpkg_Biomarkers/clone_github/gClinbiomarker_documents/Markdown_templates/example_baseline_data_1arm.csv"
+outcome.class <- "survival" # this report is for two-arm survival analysis
+outcome.var <- c("PFS","PFS.event") # two elements for survival endpoint
+trt <- NULL # this template is for single arm analysis
+active.code <- NULL
+placebo.code <- NULL
+bm <- "KRAS.mutant"
+bm.class <- "categorical"
+clinical.vars <- c("Sex","Age")
+clinical.vars.class <- NULL # if it is NULL, function ReadData() will learn each variable's class based on the input data frame.
+input <- read.csv(csv.name, stringsAsFactors=FALSE)
+# ReadData
+BEP <- NULL # column name for the column which indicates biomarker evaluable population (BEP). If it is NULL, a BEP column will be generated automatically. In the generate BEP column, any entry with non missing (non-NA) biomarker value (defined by bm column) will be assigned 1.
+BEP.indicator <- 1 # entries who have this label in the BEP column will be considered to be in BEP.
+percentile.trycut <- NULL # no need for categorical biomarker
+numerical.trycut <- NULL # no need for categorical biomarker
+percentile.finalcut <- NULL # no need for categorical biomarker
+numerical.finalcut <- NULL # no need for categorical biomarker
+covariate <- NULL # covariate to be included in within-arm analysis, cutoff exploration and subgroup analysis. Could be a vector. If this is not NULL, an addictive model will be fitted. Estimates from the forest plot functions will be affected
+strata <- NULL # stratification factors to be included in within-arm analysis, cutoff exploration and subgroup analysis. Could be a vector. If this is not NULL, a model with strata() will be fitted. Estimates from the forest plot functions will be affected
+
+if(is.null(BEP)){
+  BEP <- "BEP"
+  input$BEP <- ifelse(is.na(input[[bm]]),0,1)
+}
+input.bep <- input[which(input[[BEP]]==BEP.indicator),]
+
+
+if(is.null(clinical.vars.class)){
+for(var in clinical.vars){
+  if(class(input[,var])%in%c("numeric","integer"))var.class <- "numeric"
+  if(class(input[,var])%in%c("logical"))class(input[,var]) <- "character"
+  if(class(input[,var])%in%c("character","factor"))var.class <- "categorical"
+  clinical.vars.class <- c(clinical.vars.class, var.class)
+}  
+}
+
+names(clinical.vars.class) <- clinical.vars
+  
+if(!is.null(numerical.trycut)) percentile.trycut <- NULL
+if(!is.null(numerical.finalcut)) percentile.finalcut <- NULL
+
+
+```
+
+# The dataset
+The dataset have `r nrow(input)` entries. In which `r nrow(input.bep)` are in biomarker evaluable population (BEP).
+
+* Endpoint of interest: `r outcome.var[1]`
+* Biomarker: `r bm`
+* Biomarker type: `r bm.class`
+
+
+
+# Representativeness: Selection Bias of Biomarker Population
+
+In this section, we are trying to answer the question: *Are biomarker evaluable population representative of the full population population? *
+
+Key baseline demographics and prognostic characteristics (including stratification variables and any variables with known prognostic effect) and efficacy outcomes should be summarized by treatment groups and compared between biomarker evaluable population (BEP) and the full population. These analyses are conducted to investigate any potential selection bias associated with the availability of the biomarker (e.g. we may not get enough tissue for patients whose tumor size is small. Therefore they may be exlcuded from BEP).
+
+The key clinical biomarkers considered are:
+
+```{r}
+clinical.vars.class
+```
+
+
+
+## Check selection bias in terms of key clinical variables, between full population and BEP
+
+
+```{r}
+kable(SummaryVars(data=input, trt=trt, subgroup=BEP, subgroup.indicator = BEP.indicator, var=clinical.vars, var.class=clinical.vars.class))
+```
+
+
+## Check whether the clinical outcome in BEP is comparable to the full population
+
+The following plot compares survival outcome in BEP vs. the full population. The KM curve and 95% CI are plotted for each arm. The BEP KM curve is expected to be within the full population confidence bands.
+
+```{r, fig.height=5, fig.width=10}
+CompareKM(data=input,tte=outcome.var[1], cen=outcome.var[2],trt=trt, bep=BEP, bep.indicator = BEP.indicator)
+```
+
+
+
+## Examine whether the prognostic/null trend of key clinical variables holds in BEP
+
+The following forest plot can be used to examine whether any of the key prognostic clinical variables still show prognostic trend in BEP:
+
+```{r, fig.height=14,fig.width=10}
+forest.bep <- PlotTabForestMulti(data=input,
+                  outcome.class=outcome.class,
+                  outcome.var=outcome.var,
+                  trt=trt,
+                  var=clinical.vars,
+                  var.class=clinical.vars.class,
+                  bep=BEP,bep.indicator=BEP.indicator, 
+                  compare.bep.itt=TRUE
+                   )
+```
+
+
+
+
+
+If any selection bias is suspected, you may consider to stratify for the imbalanced factor in downstream analysis (e.g. unstratified analysis as primary analysis and stratified analysis as sensitivity analysis).
+
+
+# Biomarker property and its association to clinical variables
+
+Relationship between the biomarker and key demographic and prognostic variables should also be investigated using bivariate plots. Prognostic property of the biomarker should also be assessed, by estimates of the clinical efficacy in the control arm.
+
+
+## Biomarker property and relationship to clinical variable
+
+The following results show single variate plot for biomaker and bi-variate plots to investigate biomarker-clinical variable relationship.
+
+```{r fig.width=12, fig.height=8}
+PlotProperty(data=input, biomarker.var=bm, biomarker.class=bm.class,
+             var=clinical.vars, 
+             var.class=clinical.vars.class,
+             log2=FALSE, par.param = list(mfrow=c(2,3)))
+```
+
+
+
+
+# Biomarker subgroup analysis
+
+
+## Estimations within each subgroup
+
+The following figures investigate whether the biomarker shows a within-arm effect (e.g. patients within one biomarker subgroup tend to have better clinical outcome):
+
+
+```{r, fig.height=5,fig.width=8 }
+if(bm.class=="numeric"){
+if(!is.null(numerical.finalcut)) levs <- paste0(c(">=","<"),numerical.finalcut)
+if(is.null(numerical.finalcut)) {
+  nm <- quantile(input.bep[[bm]],percentile.finalcut, 2) # default quantile type in forest plot functions
+  numerical.finalcut <- round(nm,2) # default rounding decimal in forest plots
+  levs <- paste0(c(">=","<"),percentile.finalcut*100,"%")
+}
+
+bm2 <- paste0(bm,"_group")
+input[[bm2]] <- ifelse(input[[bm]] >= numerical.finalcut, levs[1],levs[2])
+input[[bm2]]<- factor(input[[bm2]], levels=levs) # ">=" as Dx+
+}
+
+if(bm.class=="categorical") {
+  bm2 <- bm
+  levs <- unique(input[[bm2]])
+}
+
+res.2group <- PlotTabForestBiomarker(data=input,
+                                  outcome.class=outcome.class,
+                                  outcome.var=outcome.var,
+                                  trt=trt,
+                                  var=bm2,
+                                  var.class="categorical",
+                                  greater=TRUE, less=TRUE,
+                                  show.itt=TRUE, show.bep=TRUE,
+                                  covariate=covariate, strata=strata)
+```
+
+
+The forest plots above show within-arm HR across biomarker subgroups.
+For a given arm, if the HR is not all around 1, it indicates that within this arm the biomarker has an association to the clinical outcome.
+
+
+## KM curves
+
+The following figure show KM curves of the biomarker subgroups:
+
+```{r  include=TRUE,fig.width=9, fig.height=9}
+km.out <- PlotKM(data=input, tte=outcome.var[1],cen=outcome.var[2], bep=BEP,  
+        trt=trt, var=bm2, var.class="categorical",
+        legend.loc="topright",
+        plot.median=FALSE)
+```
+
+
+## Check whether biomarker subgroup is confounded with key clinical variables
+
+The following table checks whether the biomarker subgroup is confounded with clinical variables. Here we check whether the clinical variable distribution is comparable in biomarker subgroups. 
+
+\tiny
+```{r}
+input.bep <- input[which(input[[BEP]]==BEP.indicator),]
+
+
+kable(
+SummaryVars(data=input.bep,trt=trt, subgroup=bm2, var=clinical.vars, 
+       var.class=clinical.vars.class, subgroup.indicator=levs[1],compare.subgroup=TRUE)
+)
+```
+
+\normalsize
+
+The following plot show treatment effect estimations in smaller subgroups defined by both biomarker and clinical variables. For numerical clinical variable, it is dichotomized by its median.
+
+```{r, fig.height=7,fig.width=10}
+res.subgroup.cov <- PlotTabForestMulti(data=input,
+                                  outcome.class=outcome.class,
+                                  outcome.var=outcome.var,
+                                  trt=trt,
+                                  var=clinical.vars,
+                                  var.class=clinical.vars.class,
+                                  compare.bep.itt=FALSE,
+                                  compare.subgroup=TRUE,
+                                  subgroup=bm2,
+                                  covariate=covariate, strata=strata
+                   )
+```
+
+
